@@ -60,8 +60,8 @@ let MOCK_JOBS = genMockJobs(42);
 
 function fmtCur(n){ return "₹" + Math.round(n).toLocaleString("en-IN"); }
 
-/* ============== SIMULATED "AI" LAYER ============== */
-function callAIChat(question, ctx){
+/* ============== RULE-BASED FALLBACK (used only if no API key is set, or the API call fails) ============== */
+function ruleBasedChat(question, ctx){
   const q = question.toLowerCase();
   const flagged = ctx.jobs.filter(j=>j.fairness.status==="underpaid").length;
   if(q.includes("fair") && (q.includes("this") || q.includes("fare"))){
@@ -82,7 +82,52 @@ function callAIChat(question, ctx){
   if(q.includes("increase") || q.includes("income") || q.includes("more money")){
     return "Three patterns from your data: 1) your highest fairness scores cluster on UrbanRide evening shifts — prioritise those when available, 2) you have unclaimed potential during weekend afternoons where community benchmark fares run higher, 3) reducing very long shifts (9+ hrs) slightly raises your effective hourly rate by cutting late-shift underpayment risk.";
   }
-  return "I can help with fairness checks, your rights, drafting complaints, explaining your earnings, whether to accept a fare, or how to earn more. Try asking one of those, or open the relevant tab and ask about what you see there.";
+  return "I can help with fairness checks, your rights, drafting complaints, explaining your earnings, whether to accept a fare, or how to earn more. Try asking one of those, or open the relevant tab and ask about what you see there. (Note: live AI is currently unavailable — set GROQ_API_KEY to enable open-ended answers.)";
+}
+
+/* ============== REAL AI LAYER (Groq — OpenAI-compatible endpoint) ============== */
+async function callAIChat(question, ctx){
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    console.warn("GROQ_API_KEY not set — falling back to rule-based responses.");
+    return ruleBasedChat(question, ctx);
+  }
+
+  const systemPrompt = `You are "GigShield Advisor", a helpful, concise AI assistant inside the GigShield app for gig workers (delivery/rideshare drivers). \
+You can answer ANY question the worker asks — not just fixed topics — including general questions about gig work, labor rights, budgeting, negotiating, wellbeing, or anything unrelated. \
+When relevant, ground your answer in this worker's real logged job data (JSON): ${JSON.stringify(ctx)}. \
+Keep answers practical and warm, ideally under 120 words unless the question needs more detail.`;
+
+  try {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: question }
+        ]
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || data.error) {
+      console.error("Groq API error:", data.error || data);
+      return ruleBasedChat(question, ctx);
+    }
+
+    const text = data.choices?.[0]?.message?.content?.trim();
+
+    return text || ruleBasedChat(question, ctx);
+  } catch (err) {
+    console.error("AI chat request failed:", err);
+    return ruleBasedChat(question, ctx);
+  }
 }
 
 // Routes
@@ -96,12 +141,12 @@ app.post('/api/jobs', (req, res) => {
   res.json({ message: "Job added successfully", job: newJob });
 });
 
-app.post('/api/chat', (req, res) => {
+app.post('/api/chat', async (req, res) => {
   const { question, ctx } = req.body;
   // Overwrite jobs with server side jobs for context
   ctx.jobs = MOCK_JOBS; 
   ctx.lastJob = MOCK_JOBS[0];
-  const response = callAIChat(question, ctx);
+  const response = await callAIChat(question, ctx);
   res.json({ response });
 });
 

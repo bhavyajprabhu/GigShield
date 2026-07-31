@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { auth } from './firebase.js';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged } from 'firebase/auth';
+import { auth, googleProvider } from './firebase.js';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signInWithPopup } from 'firebase/auth';
 import Chart from 'chart.js/auto';
 
 
@@ -480,6 +480,17 @@ function Auth({ mode, setMode, onAuth }) {
       setError(err.message.replace("Firebase: ", ""));
     }
   };
+
+  const handleGoogleSignIn = async () => {
+    setError("");
+    try {
+      const userCredential = await signInWithPopup(auth, googleProvider);
+      onAuth({ name: userCredential.user.displayName || "Rider", email: userCredential.user.email });
+    } catch (err) {
+      setError(err.message.replace("Firebase: ", ""));
+    }
+  };
+
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div className="card fade-up" style={{ width: 420, padding: 32 }}>
@@ -522,6 +533,44 @@ function Auth({ mode, setMode, onAuth }) {
             {mode === "login" ? "Log in" : mode === "register" ? "Create account" : "Send reset link"}
           </button>
         </form>
+
+        {mode !== "forgot" && (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0" }}>
+              <div style={{ flex: 1, height: 1, background: "var(--panel-2)" }} />
+              <span style={{ fontSize: 12, color: "var(--text-faint)" }}>OR</span>
+              <div style={{ flex: 1, height: 1, background: "var(--panel-2)" }} />
+            </div>
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              style={{
+                width: "100%",
+                padding: "12px",
+                borderRadius: 8,
+                border: "1px solid var(--panel-2)",
+                background: "var(--panel-2)",
+                color: "var(--text)",
+                fontWeight: 600,
+                fontSize: 14,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 10,
+                cursor: "pointer"
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/>
+                <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/>
+                <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/>
+                <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"/>
+              </svg>
+              Continue with Google
+            </button>
+          </>
+        )}
+
         <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 18, textAlign: "center", lineHeight: 1.6 }}>
           Secured by Firebase Authentication.
         </div>
@@ -1021,10 +1070,11 @@ function FairnessChecker({ jobs }) {
 /* ================= AI CHAT ================= */
 function AIChat({ jobs }) {
   const suggestions = ["Is this fare fair?", "What are my rights?", "How do I raise a complaint?", "Explain my earnings", "Should I accept this ride?", "How can I increase my income?"];
-  const [messages, setMessages] = useState([{ role: "ai", text: "Hi, I'm your GigShield advisor. Ask me about a fare, your rights, or how your week's earnings looked — I'll answer using your logged job data." }]);
+  const [messages, setMessages] = useState([{ role: "ai", text: "Hi, I'm your GigShield advisor. Ask me anything — a fare, your rights, your earnings, or anything else on your mind." }]);
   const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
   const endRef = useRef(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading]);
 
   const ctx = useMemo(() => {
     const flagged = jobs.filter(j => j.fairness.status === "underpaid");
@@ -1037,18 +1087,19 @@ function AIChat({ jobs }) {
   }, [jobs]);
 
   const send = (text) => {
-    if (!text.trim()) return;
+    if (!text.trim() || loading) return;
     setMessages(m => [...m, { role: "user", text }]);
     setInput("");
-    setTimeout(() => {
-      fetch('http://localhost:5000/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, ctx })
-      })
-        .then(r => r.json())
-        .then(data => setMessages(m => [...m, { role: "ai", text: data.response }]));
-    }, 500);
+    setLoading(true);
+    fetch('http://localhost:5000/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: text, ctx })
+    })
+      .then(r => r.json())
+      .then(data => setMessages(m => [...m, { role: "ai", text: data.response }]))
+      .catch(() => setMessages(m => [...m, { role: "ai", text: "Sorry, I couldn't reach the advisor service. Please check that the backend server is running and try again." }]))
+      .finally(() => setLoading(false));
   };
 
   return (
@@ -1065,6 +1116,11 @@ function AIChat({ jobs }) {
               }}>{m.text}</div>
             </div>
           ))}
+          {loading && (
+            <div style={{ alignSelf: "flex-start", maxWidth: "78%" }}>
+              <div style={{ padding: "11px 14px", borderRadius: 12, fontSize: 13.5, background: "var(--panel-2)", color: "var(--text-dim)" }}>Thinking…</div>
+            </div>
+          )}
           <div ref={endRef} />
         </div>
         <div style={{ padding: 14, borderTop: "1px solid var(--line)" }}>
@@ -1072,13 +1128,13 @@ function AIChat({ jobs }) {
             {suggestions.map(s => <button key={s} onClick={() => send(s)} className="btn btn-sm btn-ghost" style={{ border: "1px solid var(--line-strong)" }}>{s}</button>)}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <input className="field" placeholder="Type a question…" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send(input)} />
-            <button className="btn btn-ghost btn-sm" title="Voice input (simulated)" onClick={() => send("Is this fare fair?")}><IconMic size={16} /></button>
-            <button className="btn btn-primary btn-sm" onClick={() => send(input)}><IconSend size={15} /></button>
+            <input className="field" placeholder="Type a question…" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send(input)} disabled={loading} />
+            <button className="btn btn-ghost btn-sm" title="Voice input (simulated)" onClick={() => send("Is this fare fair?")} disabled={loading}><IconMic size={16} /></button>
+            <button className="btn btn-primary btn-sm" onClick={() => send(input)} disabled={loading}><IconSend size={15} /></button>
           </div>
         </div>
       </div>
-      <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 10, maxWidth: 760 }}>Simulated AI — answers are generated by rules over your logged job data in this demo. Swap in the Gemini API per the README for open-ended, live answers.</div>
+      <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 10, maxWidth: 760 }}>Powered by live AI, grounded in your logged job data — ask anything, not just the suggestions above.</div>
     </div>
   );
 }
