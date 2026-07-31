@@ -462,8 +462,24 @@ function Landing({onEnter}){
 /* ================= AUTH ================= */
 function Auth({mode, setMode, onAuth}){
   const [form,setForm] = useState({name:"", email:"", phone:"", password:""});
+  const [error, setError] = useState("");
   const set = (k)=>(e)=>setForm({...form,[k]:e.target.value});
-  const submit = (e)=>{ e.preventDefault(); onAuth({name: form.name || "Rider", email: form.email || "rider@example.com"}); };
+  
+  const submit = async (e)=>{ 
+    e.preventDefault(); 
+    setError("");
+    try {
+      if(mode === "login") {
+        const userCredential = await signInWithEmailAndPassword(auth, form.email, form.password);
+        onAuth({name: form.name || "Rider", email: userCredential.user.email});
+      } else if (mode === "register") {
+        const userCredential = await createUserWithEmailAndPassword(auth, form.email, form.password);
+        onAuth({name: form.name || "Rider", email: userCredential.user.email});
+      }
+    } catch (err) {
+      setError(err.message.replace("Firebase: ", ""));
+    }
+  };
   return (
     <div style={{minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", padding:20}}>
       <div className="card fade-up" style={{width:420, padding:32}}>
@@ -479,6 +495,7 @@ function Auth({mode, setMode, onAuth}){
           ))}
         </div>
         <form onSubmit={submit}>
+          {error && <div style={{padding: "10px", background: "rgba(255,0,0,0.1)", color: "#ff4d4d", borderRadius: 6, marginBottom: 14, fontSize: 13}}>{error}</div>}
           {mode==="register" && (
             <div style={{marginBottom:14}}>
               <label className="field-label">Full name</label>
@@ -506,7 +523,7 @@ function Auth({mode, setMode, onAuth}){
           </button>
         </form>
         <div style={{fontSize:12, color:"var(--text-faint)", marginTop:18, textAlign:"center", lineHeight:1.6}}>
-          Demo mode — this creates a local session only. Wire up Firebase Authentication per the README for real accounts.
+          Secured by Firebase Authentication.
         </div>
       </div>
     </div>
