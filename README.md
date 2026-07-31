@@ -1,6 +1,6 @@
 # GigShield
 
-Submission for the [Hackathon Name]
+Submission for the Synaptrix
 
 ## Problem Statement Chosen
 
