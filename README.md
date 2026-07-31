@@ -10,7 +10,7 @@ Submission for the [Hackathon Name]
 
 ## Team
 
-**Team Name:**
+**Team Name:AI Alchemists**
 
 ## Our Solution
 
@@ -101,6 +101,3 @@ This project needs **one** environment variable, set in `backend/.env` (see `bac
 
 `.env` is excluded via `.gitignore` and should never be committed. `.env.example` (committed, with placeholder values only) shows judges exactly which keys to add on their end.
 
-## Screenshots
-
-_Add 2-3 screenshots of the app in action here._
