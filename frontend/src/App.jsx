@@ -1,102 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>GigShield — AI Companion for Fair Wages &amp; Worker Safety</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js"></script>
-<style>
-:root{
-  --bg:#0A0D14;
-  --bg-soft:#0F1420;
-  --panel:#131928;
-  --panel-2:#161d2e;
-  --line:rgba(255,255,255,0.08);
-  --line-strong:rgba(255,255,255,0.14);
-  --text:#EDEFF4;
-  --text-dim:#8B93A6;
-  --text-faint:#5A6379;
-  --amber:#FFB020;
-  --amber-dim:#8A6218;
-  --green:#33D6A6;
-  --green-dim:#1E7A5F;
-  --red:#FF5C63;
-  --red-dim:#8F2F33;
-  --blue:#4C8DFF;
-  --radius:14px;
-  --radius-sm:8px;
-  font-family:'Inter',system-ui,sans-serif;
-}
-html[data-theme="light"]{
-  --bg:#F4F3EE;
-  --bg-soft:#FFFFFF;
-  --panel:#FFFFFF;
-  --panel-2:#F0EFEA;
-  --line:rgba(10,13,20,0.10);
-  --line-strong:rgba(10,13,20,0.18);
-  --text:#12141B;
-  --text-dim:#5B6270;
-  --text-faint:#8C93A1;
-  --amber-dim:#F4D39A;
-  --green-dim:#B9EBDC;
-  --red-dim:#FFCACD;
-}
-*{box-sizing:border-box; margin:0; padding:0;}
-body{background:var(--bg); color:var(--text); min-height:100vh; overflow-x:hidden; transition:background .2s,color .2s;}
-::-webkit-scrollbar{width:8px; height:8px;}
-::-webkit-scrollbar-thumb{background:var(--line-strong); border-radius:8px;}
-.disp{font-family:'Space Grotesk',sans-serif;}
-.mono{font-family:'JetBrains Mono',monospace;}
-a{color:inherit;}
-button{font-family:inherit; cursor:pointer;}
-input,select,textarea{font-family:inherit;}
-.card{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);}
-.hairline{border-bottom:1px solid var(--line);}
-.btn{
-  display:inline-flex; align-items:center; justify-content:center; gap:8px;
-  padding:11px 20px; border-radius:10px; border:1px solid var(--line-strong);
-  background:transparent; color:var(--text); font-weight:600; font-size:14px;
-  transition:all .15s ease;
-}
-.btn:hover{border-color:var(--amber); color:var(--amber);}
-.btn-primary{background:var(--amber); color:#1A1200; border-color:var(--amber);}
-.btn-primary:hover{background:#ffc24d; color:#1A1200; filter:none;}
-.btn-ghost{border-color:transparent;}
-.btn-ghost:hover{background:var(--panel-2); border-color:var(--line);}
-.btn-danger{background:var(--red); color:#2B0708; border-color:var(--red);}
-.btn-danger:hover{background:#ff7b81;}
-.btn-sm{padding:7px 14px; font-size:13px; border-radius:8px;}
-.pill{display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:100px; font-size:11.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase;}
-.pill-green{background:rgba(51,214,166,0.14); color:var(--green);}
-.pill-amber{background:rgba(255,176,32,0.14); color:var(--amber);}
-.pill-red{background:rgba(255,92,99,0.14); color:var(--red);}
-.field-label{font-size:12px; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; display:block;}
-.field{width:100%; padding:11px 13px; border-radius:9px; background:var(--bg-soft); border:1px solid var(--line-strong); color:var(--text); font-size:14px; outline:none;}
-.field:focus{border-color:var(--amber);}
-.corner-tag{position:relative; padding-left:14px;}
-.corner-tag::before{content:""; position:absolute; left:0; top:2px; bottom:2px; width:2px; background:var(--amber);}
-.tick{width:5px; height:5px; border-radius:50%; display:inline-block;}
-@keyframes pulse{0%,100%{opacity:1;} 50%{opacity:.35;}}
-.pulse{animation:pulse 1.6s ease-in-out infinite;}
-@keyframes fadeUp{from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:translateY(0);}}
-.fade-up{animation:fadeUp .45s ease both;}
-@keyframes floatY{0%,100%{transform:translateY(0);} 50%{transform:translateY(-8px);}}
-.float{animation:floatY 4s ease-in-out infinite;}
-.gauge-track{stroke:var(--line-strong);}
-.scroll-fade{-webkit-mask-image:linear-gradient(to bottom, black 92%, transparent 100%);}
-</style>
-</head>
-<body>
-<div id="root"></div>
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { auth } from './firebase.js';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged } from 'firebase/auth';
+import Chart from 'chart.js/auto';
 
-<script type="text/babel" data-presets="react">
-const {useState,useEffect,useMemo,useRef} = React;
+
+
 const CHART_COLORS = ["#FFB020","#33D6A6","#4C8DFF","#FF5C63","#9C7BFF"];
 function ChartBox({type, data, options, height=220, ariaLabel}){
   const canvasRef = useRef(null);
@@ -629,7 +537,12 @@ function App(){
   const [user, setUser] = useState(null);
   const [theme, setTheme] = useState("dark");
   const [page, setPage] = useState("dashboard");
-  const [jobs, setJobs] = useState(()=>genMockJobs(42));
+  const [jobs, setJobs] = useState([]);
+  useEffect(() => {
+    fetch('http://localhost:5000/api/jobs')
+      .then(r => r.json())
+      .then(data => setJobs(data.map(j => ({ ...j, date: new Date(j.date) }))));
+  }, []);
   const [notifications, setNotifications] = useState([
     {id:1, text:"3 underpaid jobs flagged this week", tone:"red", time:"2h ago"},
     {id:2, text:"Weekly report is ready", tone:"amber", time:"1d ago"},
@@ -879,7 +792,7 @@ function Dashboard({jobs, setPage, profile}){
 
 /* ================= JOB LOGGING ================= */
 function JobLogging({addJob}){
-  const [f,setF] = useState({platform:PLATFORMS[0], fare:"", distance:"", timeHour:"18", duration:"", pickup:AREAS[0], drop:AREAS[1], notes:""});
+  const [f,setF] = useState({platform:PLATFORMS[0], fare:"", distance:"", timeHour:"18:00", duration:"", pickup:"", drop:"", notes:""});
   const set = k=>e=>setF({...f,[k]:e.target.value});
   const submit = (e)=>{
     e.preventDefault();
@@ -912,14 +825,14 @@ function JobLogging({addJob}){
           <div><label className="field-label">Duration (minutes)</label>
             <input className="field" type="number" required placeholder="24" value={f.duration} onChange={set("duration")}/>
           </div>
-          <div><label className="field-label">Hour of day (0-23)</label>
-            <input className="field" type="number" min="0" max="23" value={f.timeHour} onChange={set("timeHour")}/>
+          <div><label className="field-label">Time</label>
+            <input className="field" type="time" required value={f.timeHour} onChange={set("timeHour")}/>
           </div>
           <div><label className="field-label">Pickup area</label>
-            <select className="field" value={f.pickup} onChange={set("pickup")}>{AREAS.map(a=><option key={a}>{a}</option>)}</select>
+            <input className="field" type="text" placeholder="e.g. Downtown Core" required value={f.pickup} onChange={set("pickup")}/>
           </div>
           <div><label className="field-label">Drop area</label>
-            <select className="field" value={f.drop} onChange={set("drop")}>{AREAS.map(a=><option key={a}>{a}</option>)}</select>
+            <input className="field" type="text" placeholder="e.g. Riverside District" required value={f.drop} onChange={set("drop")}/>
           </div>
           <div style={{gridColumn:"1/-1"}}><label className="field-label">Notes (optional)</label>
             <textarea className="field" rows="2" value={f.notes} onChange={set("notes")}/>
@@ -1109,7 +1022,13 @@ function AIChat({jobs}){
     setMessages(m=>[...m,{role:"user", text}]);
     setInput("");
     setTimeout(()=>{
-      setMessages(m=>[...m,{role:"ai", text: callAIChat(text, ctx)}]);
+      fetch('http://localhost:5000/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: text, ctx })
+      })
+      .then(r => r.json())
+      .then(data => setMessages(m => [...m, { role: "ai", text: data.response }]));
     }, 500);
   };
 
@@ -1588,8 +1507,6 @@ function AdminPanel({jobs}){
   );
 }
 
-/* ================= MOUNT ================= */
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
-</script>
-</body>
-</html>
+
+
+export default App;
