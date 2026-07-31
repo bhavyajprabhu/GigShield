@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 
@@ -56,7 +57,7 @@ function genMockJobs(n=42){
   return jobs.sort((a,b)=>b.date-a.date);
 }
 
-let MOCK_JOBS = genMockJobs(42);
+let MOCK_JOBS = [];
 
 function fmtCur(n){ return "₹" + Math.round(n).toLocaleString("en-IN"); }
 

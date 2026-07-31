@@ -190,10 +190,11 @@ function parseOCRText(text) {
     // realistically always under 1000, so a 4+ digit bare number is far more
     // likely a misread symbol than a genuine 4-digit fare — strip the leading
     // digit and prefer that reading. Always left editable before saving.
-    const bare = [...clean.matchAll(/\b(\d{1,4})\.(\d{2})\b/g)].map(m => ({ intPart: m[1], dec: m[2] }));
+    const bare = [...clean.matchAll(/\b([\d,]{1,5})\.(\d{2})\b/g)].map(m => ({ intPart: m[1].replace(/,/g, ""), dec: m[2] }));
     for (const c of bare) {
       let val = parseFloat(c.intPart + "." + c.dec);
-      if (c.intPart.length >= 4) {
+      // Only trim the first digit if it's 4+ digits long and the fare is excessively high, or starts with 7 (common ₹ misread)
+      if (c.intPart.length >= 4 && (c.intPart.startsWith("7") || val > 3000)) {
         const trimmed = parseFloat(c.intPart.slice(1) + "." + c.dec);
         if (trimmed >= 10) val = trimmed;
       }
@@ -208,11 +209,12 @@ function parseOCRText(text) {
   // the text between/after the leg markers to pull the pickup and drop
   // addresses that ride/delivery apps print right below each leg. ---
   let distanceKm = null, durationMin = null, pickup = "", drop = "";
-  const legs = [...clean.matchAll(/(\d+(?:\.\d+)?)\s*mins?\s*\(([\d.]+)\s*km\)/gi)];
+  const legs = [...clean.matchAll(/(?:(\d+)\s*(?:hr|hour)s?\s*)?(\d+(?:\.\d+)?)\s*mins?\s*\(([\d.]+)\s*km\)/gi)];
   if (legs.length) {
     const last = legs[legs.length - 1];
-    durationMin = parseFloat(last[1]);
-    distanceKm = parseFloat(last[2]);
+    const hrs = last[1] ? parseInt(last[1], 10) : 0;
+    durationMin = hrs * 60 + parseFloat(last[2]);
+    distanceKm = parseFloat(last[3]);
     if (legs.length >= 2) {
       const leg0 = legs[0], leg1 = legs[1];
       pickup = parseAddressBlock(clean.slice(leg0.index + leg0[0].length, leg1.index));
@@ -243,7 +245,20 @@ function parseOCRText(text) {
   // Real-world apps (Uber, Ola, Zomato, etc.) aren't in that list, and
   // guessing one of the mock names would be silently wrong — so leave it
   // unset (null) rather than defaulting, and let the UI flag it clearly. ---
-  const platformMatch = PLATFORMS.find(p => new RegExp("\\b" + p + "\\b", "i").test(clean));
+  const platformAliases = {
+    "Uber": ["uber", "uher", "lber", "jber"],
+    "Ola": ["ola", "oia", "0la"],
+    "Namma Yatri": ["namma", "yatri"],
+    "Rapido": ["rapido", "rapid"],
+    "Swiggy": ["swiggy", "swigy"],
+    "Zomato": ["zomato", "zomatoo"],
+    "Zepto": ["zepto"],
+    "Blinkit": ["blinkit", "blink"]
+  };
+  const platformMatch = PLATFORMS.find(p => {
+    const aliases = platformAliases[p] || [p];
+    return aliases.some(alias => new RegExp(alias, "i").test(clean.replace(/\s+/g, "")));
+  });
 
   return {
     rawText: text,
@@ -593,8 +608,7 @@ const NAV = [
   { id: "savings", label: "Savings goal", icon: <IconTarget size={18} /> },
   { id: "community", label: "Community benchmark", icon: <IconUsers size={18} /> },
   { id: "complaints", label: "Complaints", icon: <IconFile size={18} /> },
-  { id: "profile", label: "Profile", icon: <IconUser size={18} /> },
-  { id: "admin", label: "Admin panel", icon: <IconGrid size={18} /> },
+  { id: "profile", label: "Profile", icon: <IconUser size={18} /> }
 ];
 
 function App() {
@@ -675,7 +689,6 @@ function App() {
           {page === "community" && <CommunityBenchmark jobs={jobs} />}
           {page === "complaints" && <Complaints jobs={jobs} pushToast={pushToast} />}
           {page === "profile" && <Profile profile={profile} setProfile={setProfile} pushToast={pushToast} />}
-          {page === "admin" && <AdminPanel jobs={jobs} />}
         </main>
       </div>
       <button onClick={() => setShowEmergency(true)} title="I feel unsafe" style={{ position: "fixed", right: 28, bottom: 28, width: 60, height: 60, borderRadius: "50%", background: "var(--red)", color: "#2B0708", border: "none", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 8px 24px rgba(255,92,99,0.35)", zIndex: 120 }}>
@@ -689,28 +702,40 @@ function App() {
 
 /* ================= SIDEBAR / TOPBAR ================= */
 function Sidebar({ page, setPage, onLogout, navOpen, setNavOpen }) {
+  const [isHovered, setIsHovered] = useState(false);
+  const sidebarWidth = isHovered ? 246 : 68;
+
   return (
     <>
-      <aside style={{ width: 246, flexShrink: 0, borderRight: "1px solid var(--line)", background: "var(--bg-soft)", position: "sticky", top: 0, height: "100vh", overflowY: "auto", display: navOpen ? "block" : undefined }}
+      <aside 
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        style={{ width: sidebarWidth, transition: "width 0.2s ease", flexShrink: 0, borderRight: "1px solid var(--line)", background: "var(--bg-soft)", position: "sticky", top: 0, height: "100vh", overflowY: "auto", overflowX: "hidden", display: navOpen ? "block" : undefined }}
         className="scroll-fade">
-        <div style={{ padding: "22px 20px", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--amber)", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1200" }}><IconShield size={18} /></div>
-          <span className="disp" style={{ fontSize: 16, fontWeight: 700 }}>GigShield</span>
+        <div style={{ padding: isHovered ? "22px 20px" : "22px 17px", display: "flex", alignItems: "center", gap: 10, transition: "padding 0.2s" }}>
+          <div style={{ minWidth: 32, width: 32, height: 32, borderRadius: 8, background: "var(--amber)", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1200" }}><IconShield size={18} /></div>
+          <span className="disp" style={{ fontSize: 16, fontWeight: 700, opacity: isHovered ? 1 : 0, transition: "opacity 0.2s", whiteSpace: "nowrap" }}>GigShield</span>
         </div>
         <nav style={{ padding: "6px 12px", display: "flex", flexDirection: "column", gap: 2 }}>
           {NAV.map(n => (
             <button key={n.id} onClick={() => { setPage(n.id); setNavOpen(false); }}
+              title={!isHovered ? n.label : undefined}
               style={{
-                display: "flex", alignItems: "center", gap: 11, padding: "10px 12px", borderRadius: 9, border: "none",
+                display: "flex", alignItems: "center", gap: 11, padding: "10px 11px", borderRadius: 9, border: "none",
                 background: page === n.id ? "rgba(255,176,32,0.12)" : "transparent",
-                color: page === n.id ? "var(--amber)" : "var(--text-dim)", fontSize: 13.5, fontWeight: 600, textAlign: "left"
+                color: page === n.id ? "var(--amber)" : "var(--text-dim)", fontSize: 13.5, fontWeight: 600, textAlign: "left",
+                whiteSpace: "nowrap"
               }}>
-              {n.icon}{n.label}
+              <div style={{ minWidth: 18, display: "flex", justifyContent: "center" }}>{n.icon}</div>
+              <span style={{ opacity: isHovered ? 1 : 0, transition: "opacity 0.2s" }}>{n.label}</span>
             </button>
           ))}
         </nav>
-        <div style={{ padding: "16px 20px", marginTop: 8 }}>
-          <button className="btn btn-ghost btn-sm" style={{ width: "100%" }} onClick={onLogout}><IconLogout size={15} /> Log out</button>
+        <div style={{ padding: "16px 12px", marginTop: 8 }}>
+          <button className="btn btn-ghost btn-sm" style={{ width: "100%", display: "flex", alignItems: "center", gap: 11, padding: "10px 11px" }} onClick={onLogout} title={!isHovered ? "Log out" : undefined}>
+            <div style={{ minWidth: 18, display: "flex", justifyContent: "center" }}><IconLogout size={15} /></div>
+            <span style={{ opacity: isHovered ? 1 : 0, transition: "opacity 0.2s", whiteSpace: "nowrap" }}>Log out</span>
+          </button>
         </div>
       </aside>
     </>
@@ -1129,7 +1154,6 @@ function AIChat({ jobs }) {
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <input className="field" placeholder="Type a question…" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send(input)} disabled={loading} />
-            <button className="btn btn-ghost btn-sm" title="Voice input (simulated)" onClick={() => send("Is this fare fair?")} disabled={loading}><IconMic size={16} /></button>
             <button className="btn btn-primary btn-sm" onClick={() => send(input)} disabled={loading}><IconSend size={15} /></button>
           </div>
         </div>
