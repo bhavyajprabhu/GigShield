@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js"></script>
 <style>
 :root{
   --bg:#0A0D14;
@@ -208,10 +209,10 @@ function fmtDateTime(d){ return d.toLocaleDateString(undefined,{month:"short",da
 function daysSince(d){ return (Date.now()-d.getTime())/86400000; }
 
 /* ============== SIMULATED "AI" LAYER ==============
-   No live network access in this environment, so the chatbot, OCR extraction,
-   and weekly-insight generator below are rule-based simulations that mirror
-   what a real Gemini + Vision API call would return. Swap in real calls per
-   the README without changing any UI code — see callAIChat / simulateOCR. */
+   The chatbot and weekly-insight generator below are rule-based simulations
+   that mirror what a real LLM API call would return — swap in a real call
+   without changing any UI code, see callAIChat below. OCR is real (Tesseract.js
+   running client-side) — see parseOCRText and the OCRUpload component. */
 function callAIChat(question, ctx){
   const q = question.toLowerCase();
   const flagged = ctx.jobs.filter(j=>j.fairness.status==="underpaid").length;
@@ -236,18 +237,64 @@ function callAIChat(question, ctx){
   return "I can help with fairness checks, your rights, drafting complaints, explaining your earnings, whether to accept a fare, or how to earn more. Try asking one of those, or open the relevant tab and ask about what you see there.";
 }
 
-function simulateOCR(){
-  const distanceKm = round2(3+rng()*10);
-  const durationMin = Math.round(distanceKm*3+rng()*8);
-  const isNight = rng()>0.6;
-  const exp = expectedFare(distanceKm,durationMin,isNight);
-  const actual = round2(exp*(0.65+rng()*0.5));
+/* ============== REAL OCR PARSING ==============
+   Runs Tesseract.js (client-side OCR, no API key / backend needed) on the
+   uploaded screenshot, then regex-parses the recognized text for fare,
+   distance and duration. This is a real read of the actual image — not a
+   simulation. Numbers are always shown for user review/edit before saving,
+   since OCR on small app-UI text can still misread digits. */
+function parseOCRText(text){
+  const clean = text.replace(/\r/g,"");
+  const lines = clean.split("\n").map(l=>l.trim()).filter(Boolean);
+
+  // --- Fare: prefer a currency-marked number near words like fare/total/earn/pay ---
+  const currencyNum = /(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d{1,2})?)/i;
+  let fare = null;
+  const fareKeywordLine = lines.find(l => /(fare|total|earning|earn|payout|amount|you\s*earned)/i.test(l));
+  if(fareKeywordLine){
+    const m = fareKeywordLine.match(currencyNum) || fareKeywordLine.match(/([\d,]+(?:\.\d{1,2})?)/);
+    if(m) fare = parseFloat(m[1].replace(/,/g,""));
+  }
+  if(fare==null){
+    // fall back: largest currency-marked number anywhere in the text
+    const all = [...clean.matchAll(new RegExp(currencyNum,"gi"))].map(m=>parseFloat(m[1].replace(/,/g,"")));
+    if(all.length) fare = Math.max(...all);
+  }
+
+  // --- Distance: number immediately followed by km/kilometre ---
+  let distanceKm = null;
+  const distMatch = clean.match(/([\d]+(?:\.\d+)?)\s*(?:km|kilomet)/i);
+  if(distMatch) distanceKm = parseFloat(distMatch[1]);
+
+  // --- Duration: number followed by min/mins/minute, or "H hr M min" ---
+  let durationMin = null;
+  const hrMin = clean.match(/(\d+)\s*(?:hr|hour)s?\s*(\d+)?\s*(?:min)?/i);
+  const minOnly = clean.match(/(\d+)\s*min/i);
+  if(hrMin){ durationMin = parseInt(hrMin[1],10)*60 + (hrMin[2]?parseInt(hrMin[2],10):0); }
+  else if(minOnly){ durationMin = parseInt(minOnly[1],10); }
+
+  // --- Night shift: look for a time with AM/PM ---
+  let isNight = false;
+  const timeMatch = clean.match(/(\d{1,2}):(\d{2})\s*(am|pm)/i);
+  if(timeMatch){
+    let hr = parseInt(timeMatch[1],10);
+    if(/pm/i.test(timeMatch[3]) && hr!==12) hr += 12;
+    if(/am/i.test(timeMatch[3]) && hr===12) hr = 0;
+    isNight = hr>=21 || hr<5;
+  }
+
+  // --- Platform: match against known platform names if present in the text ---
+  const platformMatch = PLATFORMS.find(p => new RegExp(p,"i").test(clean));
+
   return {
-    platform: pick(PLATFORMS),
-    fare: actual,
-    distanceKm, durationMin,
-    pickup: pick(AREAS), drop: pick(AREAS),
-    isNight
+    rawText: text,
+    platform: platformMatch || PLATFORMS[0],
+    fare: fare!=null ? fare : "",
+    distanceKm: distanceKm!=null ? distanceKm : "",
+    durationMin: durationMin!=null ? durationMin : "",
+    pickup: AREAS[0], drop: AREAS[1],
+    isNight,
+    confidence: [fare,distanceKm,durationMin].filter(v=>v!=null).length // 0-3, how many fields were actually found
   };
 }
 
@@ -835,19 +882,39 @@ function JobLogging({addJob}){
 /* ================= OCR UPLOAD ================= */
 function OCRUpload({addJob, pushToast}){
   const [scanning, setScanning] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [extracted, setExtracted] = useState(null);
   const [fileName, setFileName] = useState("");
-  const onFile = (e)=>{
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [ocrError, setOcrError] = useState(null);
+  const [showRaw, setShowRaw] = useState(false);
+
+  const onFile = async (e)=>{
     const file = e.target.files[0];
     if(!file) return;
     setFileName(file.name);
+    setPreviewUrl(URL.createObjectURL(file));
     setScanning(true);
+    setProgress(0);
     setExtracted(null);
-    setTimeout(()=>{
-      const data = simulateOCR();
-      setExtracted(data);
+    setOcrError(null);
+    try{
+      if(!window.Tesseract) throw new Error("OCR engine failed to load (check your internet connection) — you can still fill in the fields manually below.");
+      const result = await window.Tesseract.recognize(file, "eng", {
+        logger: m => { if(m.status==="recognizing text" && m.progress!=null) setProgress(Math.round(m.progress*100)); }
+      });
+      const text = result?.data?.text || "";
+      const parsed = parseOCRText(text);
+      if(parsed.confidence===0){
+        setOcrError("Couldn't confidently read fare/distance/time from this image. The text below is what OCR detected — please fill the fields in manually.");
+      }
+      setExtracted(parsed);
+    }catch(err){
+      setOcrError(err.message || "OCR failed on this image — please fill the fields in manually.");
+      setExtracted({ rawText:"", platform:PLATFORMS[0], fare:"", distanceKm:"", durationMin:"", pickup:AREAS[0], drop:AREAS[1], isNight:false, confidence:0 });
+    }finally{
       setScanning(false);
-    }, 1400);
+    }
   };
   const set = k=>e=>setExtracted({...extracted,[k]:e.target.value});
   const save = ()=>{
@@ -869,28 +936,52 @@ function OCRUpload({addJob, pushToast}){
       <div className="card" style={{padding:24, maxWidth:640}}>
         <label style={{display:"block", border:"1.5px dashed var(--line-strong)", borderRadius:12, padding:"34px 20px", textAlign:"center", cursor:"pointer"}}>
           <input type="file" accept="image/*" style={{display:"none"}} onChange={onFile}/>
-          <IconCamera size={30}/>
+          {previewUrl
+            ? <img src={previewUrl} alt="Uploaded screenshot preview" style={{maxHeight:160, maxWidth:"100%", borderRadius:8, marginBottom:10}}/>
+            : <IconCamera size={30}/>}
           <div style={{marginTop:10, fontWeight:600, fontSize:14}}>{fileName || "Click to upload a screenshot"}</div>
           <div style={{fontSize:12, color:"var(--text-dim)", marginTop:4}}>PNG or JPG of your delivery/ride app fare screen</div>
         </label>
-        {scanning && <div style={{marginTop:18, display:"flex", alignItems:"center", gap:10, color:"var(--amber)"}}><span className="tick pulse" style={{background:"var(--amber)"}}/> Scanning image for fare, distance and time…</div>}
+        {scanning && (
+          <div style={{marginTop:18}}>
+            <div style={{display:"flex", alignItems:"center", gap:10, color:"var(--amber)", marginBottom:8}}>
+              <span className="tick pulse" style={{background:"var(--amber)"}}/> Reading image with OCR… {progress}%
+            </div>
+            <div style={{height:6, borderRadius:4, background:"var(--panel-2)"}}>
+              <div style={{height:"100%", width:progress+"%", borderRadius:4, background:"var(--amber)", transition:"width .2s"}}/>
+            </div>
+          </div>
+        )}
+        {ocrError && !scanning && (
+          <div className="pill" style={{marginTop:18, background:"var(--red-dim)", color:"var(--red)", display:"block", padding:"10px 14px", lineHeight:1.5}}>
+            {ocrError}
+          </div>
+        )}
         {extracted && (
           <div style={{marginTop:20}}>
-            <div className="pill pill-amber" style={{marginBottom:14}}>Simulated OCR extraction — review before saving</div>
+            <div className="pill pill-amber" style={{marginBottom:14}}>
+              {extracted.confidence>=2 ? "OCR extraction — review before saving" : "OCR extraction incomplete — please check every field"}
+            </div>
             <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:14}}>
               <div><label className="field-label">Platform</label><select className="field" value={extracted.platform} onChange={set("platform")}>{PLATFORMS.map(p=><option key={p}>{p}</option>)}</select></div>
-              <div><label className="field-label">Fare (₹)</label><input className="field" type="number" value={extracted.fare} onChange={set("fare")}/></div>
-              <div><label className="field-label">Distance (km)</label><input className="field" type="number" value={extracted.distanceKm} onChange={set("distanceKm")}/></div>
-              <div><label className="field-label">Duration (min)</label><input className="field" type="number" value={extracted.durationMin} onChange={set("durationMin")}/></div>
+              <div><label className="field-label">Fare (₹)</label><input className="field" type="number" value={extracted.fare} onChange={set("fare")} placeholder="Not detected — enter manually"/></div>
+              <div><label className="field-label">Distance (km)</label><input className="field" type="number" value={extracted.distanceKm} onChange={set("distanceKm")} placeholder="Not detected — enter manually"/></div>
+              <div><label className="field-label">Duration (min)</label><input className="field" type="number" value={extracted.durationMin} onChange={set("durationMin")} placeholder="Not detected — enter manually"/></div>
               <div><label className="field-label">Pickup</label><input className="field" value={extracted.pickup} onChange={set("pickup")}/></div>
               <div><label className="field-label">Drop</label><input className="field" value={extracted.drop} onChange={set("drop")}/></div>
             </div>
             <button className="btn btn-primary" style={{marginTop:18}} onClick={save}><IconCheck size={16}/> Confirm &amp; save job</button>
+            {extracted.rawText!==undefined && (
+              <div style={{marginTop:14}}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>setShowRaw(s=>!s)}>{showRaw?"Hide":"Show"} raw OCR text</button>
+                {showRaw && <pre style={{marginTop:10, padding:12, background:"var(--panel-2)", borderRadius:8, fontSize:11.5, whiteSpace:"pre-wrap", maxHeight:180, overflow:"auto"}}>{extracted.rawText || "(no text detected in image)"}</pre>}
+              </div>
+            )}
           </div>
         )}
       </div>
       <div className="card" style={{padding:18, maxWidth:640, marginTop:14, fontSize:12.5, color:"var(--text-dim)", lineHeight:1.6}}>
-        In production this calls the Google Cloud Vision (or Tesseract) OCR API on the uploaded image and parses fare/distance/time fields with a regex + layout model — see README for the drop-in endpoint.
+        This runs Tesseract.js OCR directly in your browser on the image you upload — no server, no API key. It works best on clear, well-lit screenshots with readable text; low-res or heavily stylised app screens may need manual correction, which is why every field above stays editable before you save.
       </div>
     </div>
   );
