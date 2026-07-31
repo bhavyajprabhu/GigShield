@@ -153,7 +153,7 @@ const IconGlobe = (p)=><Icon {...p} d={<><circle cx="12" cy="12" r="9"/><path d=
 const IconLogout = (p)=><Icon {...p} d={<><path d="M9 21H4V3h5"/><path d="M16 17l5-5-5-5M21 12H9"/></>} />;
 
 /* ================= MOCK DATA ENGINE ================= */
-const PLATFORMS = ["SwiftEats","UrbanRide","QuickDash","MetroCab"];
+const PLATFORMS = ["Uber","Ola","Namma Yatri","Rapido","Swiggy","Zomato","Zepto","Blinkit"];
 const AREAS = ["Downtown Core","Riverside District","North Terminal","Old Market","Tech Park","Harbor Row"];
 const rng = (seed => () => { seed = (seed*9301+49297)%233280; return seed/233280; })(42);
 function pick(arr){ return arr[Math.floor(rng()*arr.length)]; }
@@ -243,6 +243,21 @@ function callAIChat(question, ctx){
    distance and duration. This is a real read of the actual image — not a
    simulation. Numbers are always shown for user review/edit before saving,
    since OCR on small app-UI text can still misread digits. */
+function parseAddressBlock(raw){
+  // Cuts off at the first UI/footer element (payment method, action buttons)
+  // so those don't get swept into the address, and drops symbol-only lines
+  // that are usually OCR misreads of icons.
+  const stop = /^(cash(\s+(on\s+delivery|payment))?|card payment|online payment|pay online|match|confirm|accept|decline|call|message|chat|share trip|rate|tip|swipe|slide to|go online)\b/i;
+  const lines = raw.split("\n").map(l=>l.trim()).filter(Boolean);
+  const kept = [];
+  for(const l of lines){
+    if(stop.test(l)) break;
+    if(!/[a-zA-Z]/.test(l)) continue;
+    kept.push(l.replace(/,\s*$/,""));
+  }
+  return kept.join(", ");
+}
+
 function parseOCRText(text){
   const clean = text.replace(/\r/g,"");
   const lines = clean.split("\n").map(l=>l.trim()).filter(Boolean);
@@ -260,18 +275,51 @@ function parseOCRText(text){
     const all = [...clean.matchAll(new RegExp(currencyNum,"gi"))].map(m=>parseFloat(m[1].replace(/,/g,"")));
     if(all.length) fare = Math.max(...all);
   }
+  if(fare==null){
+    // OCR frequently mangles the ₹/Rs symbol rather than cleanly dropping it —
+    // it often turns into a stray digit glued directly onto the front of the
+    // real number (e.g. "₹193.24" → "7193.24"). A single-trip local fare is
+    // realistically always under 1000, so a 4+ digit bare number is far more
+    // likely a misread symbol than a genuine 4-digit fare — strip the leading
+    // digit and prefer that reading. Always left editable before saving.
+    const bare = [...clean.matchAll(/\b(\d{1,4})\.(\d{2})\b/g)].map(m=>({intPart:m[1], dec:m[2]}));
+    for(const c of bare){
+      let val = parseFloat(c.intPart+"."+c.dec);
+      if(c.intPart.length>=4){
+        const trimmed = parseFloat(c.intPart.slice(1)+"."+c.dec);
+        if(trimmed>=10) val = trimmed;
+      }
+      if(val>=10){ fare = val; break; }
+    }
+  }
 
-  // --- Distance: number immediately followed by km/kilometre ---
-  let distanceKm = null;
-  const distMatch = clean.match(/([\d]+(?:\.\d+)?)\s*(?:km|kilomet)/i);
-  if(distMatch) distanceKm = parseFloat(distMatch[1]);
-
-  // --- Duration: number followed by min/mins/minute, or "H hr M min" ---
-  let durationMin = null;
-  const hrMin = clean.match(/(\d+)\s*(?:hr|hour)s?\s*(\d+)?\s*(?:min)?/i);
-  const minOnly = clean.match(/(\d+)\s*min/i);
-  if(hrMin){ durationMin = parseInt(hrMin[1],10)*60 + (hrMin[2]?parseInt(hrMin[2],10):0); }
-  else if(minOnly){ durationMin = parseInt(minOnly[1],10); }
+  // --- Distance, duration & addresses: some ride-request cards show TWO legs
+  // — the driver's distance to reach pickup, then the actual trip. Always
+  // take the LAST "X min (Y km)" pair for distance/duration (the fare should
+  // be checked against the actual trip, not the pickup approach), and use
+  // the text between/after the leg markers to pull the pickup and drop
+  // addresses that ride/delivery apps print right below each leg. ---
+  let distanceKm = null, durationMin = null, pickup = "", drop = "";
+  const legs = [...clean.matchAll(/(\d+(?:\.\d+)?)\s*mins?\s*\(([\d.]+)\s*km\)/gi)];
+  if(legs.length){
+    const last = legs[legs.length-1];
+    durationMin = parseFloat(last[1]);
+    distanceKm = parseFloat(last[2]);
+    if(legs.length>=2){
+      const leg0 = legs[0], leg1 = legs[1];
+      pickup = parseAddressBlock(clean.slice(leg0.index+leg0[0].length, leg1.index));
+      drop = parseAddressBlock(clean.slice(leg1.index+leg1[0].length));
+    }else{
+      drop = parseAddressBlock(clean.slice(legs[0].index+legs[0][0].length));
+    }
+  }else{
+    const distMatch = clean.match(/([\d]+(?:\.\d+)?)\s*(?:km|kilomet)/i);
+    if(distMatch) distanceKm = parseFloat(distMatch[1]);
+    const hrMin = clean.match(/(\d+)\s*(?:hr|hour)s?\s*(\d+)?\s*(?:min)?/i);
+    const minOnly = clean.match(/(\d+)\s*min/i);
+    if(hrMin){ durationMin = parseInt(hrMin[1],10)*60 + (hrMin[2]?parseInt(hrMin[2],10):0); }
+    else if(minOnly){ durationMin = parseInt(minOnly[1],10); }
+  }
 
   // --- Night shift: look for a time with AM/PM ---
   let isNight = false;
@@ -283,18 +331,22 @@ function parseOCRText(text){
     isNight = hr>=21 || hr<5;
   }
 
-  // --- Platform: match against known platform names if present in the text ---
-  const platformMatch = PLATFORMS.find(p => new RegExp(p,"i").test(clean));
+  // --- Platform: only claim a match against this app's known platform list.
+  // Real-world apps (Uber, Ola, Zomato, etc.) aren't in that list, and
+  // guessing one of the mock names would be silently wrong — so leave it
+  // unset (null) rather than defaulting, and let the UI flag it clearly. ---
+  const platformMatch = PLATFORMS.find(p => new RegExp("\\b"+p+"\\b","i").test(clean));
 
   return {
     rawText: text,
-    platform: platformMatch || PLATFORMS[0],
+    platform: platformMatch || null,
+    platformDetected: !!platformMatch,
     fare: fare!=null ? fare : "",
     distanceKm: distanceKm!=null ? distanceKm : "",
     durationMin: durationMin!=null ? durationMin : "",
-    pickup: AREAS[0], drop: AREAS[1],
+    pickup, drop,
     isNight,
-    confidence: [fare,distanceKm,durationMin].filter(v=>v!=null).length // 0-3, how many fields were actually found
+    confidence: [fare,distanceKm,durationMin].filter(v=>v!=null).length
   };
 }
 
@@ -921,6 +973,7 @@ function OCRUpload({addJob, pushToast}){
     const distanceKm = parseFloat(extracted.distanceKm)||0;
     const durationMin = parseFloat(extracted.durationMin)||0;
     const actual = parseFloat(extracted.fare)||0;
+    if(!extracted.platform){ pushToast("Please select a platform before saving.", "amber"); return; }
     const exp = expectedFare(distanceKm, durationMin, extracted.isNight);
     const job = {
       id:"job_"+Date.now(), platform:extracted.platform, date:new Date(), distanceKm, durationMin, isNight:extracted.isNight,
@@ -963,12 +1016,18 @@ function OCRUpload({addJob, pushToast}){
               {extracted.confidence>=2 ? "OCR extraction — review before saving" : "OCR extraction incomplete — please check every field"}
             </div>
             <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:14}}>
-              <div><label className="field-label">Platform</label><select className="field" value={extracted.platform} onChange={set("platform")}>{PLATFORMS.map(p=><option key={p}>{p}</option>)}</select></div>
+              <div>
+                <label className="field-label">Platform{!extracted.platformDetected && <span style={{color:"var(--amber)", fontWeight:400}}> — not detected, please select</span>}</label>
+                <select className="field" value={extracted.platform || ""} onChange={set("platform")}>
+                  {!extracted.platform && <option value="" disabled>Select platform…</option>}
+                  {PLATFORMS.map(p=><option key={p}>{p}</option>)}
+                </select>
+              </div>
               <div><label className="field-label">Fare (₹)</label><input className="field" type="number" value={extracted.fare} onChange={set("fare")} placeholder="Not detected — enter manually"/></div>
               <div><label className="field-label">Distance (km)</label><input className="field" type="number" value={extracted.distanceKm} onChange={set("distanceKm")} placeholder="Not detected — enter manually"/></div>
               <div><label className="field-label">Duration (min)</label><input className="field" type="number" value={extracted.durationMin} onChange={set("durationMin")} placeholder="Not detected — enter manually"/></div>
-              <div><label className="field-label">Pickup</label><input className="field" value={extracted.pickup} onChange={set("pickup")}/></div>
-              <div><label className="field-label">Drop</label><input className="field" value={extracted.drop} onChange={set("drop")}/></div>
+              <div><label className="field-label">Pickup</label><input className="field" value={extracted.pickup} onChange={set("pickup")} placeholder="Not extracted — enter manually"/></div>
+              <div><label className="field-label">Drop</label><input className="field" value={extracted.drop} onChange={set("drop")} placeholder="Not extracted — enter manually"/></div>
             </div>
             <button className="btn btn-primary" style={{marginTop:18}} onClick={save}><IconCheck size={16}/> Confirm &amp; save job</button>
             {extracted.rawText!==undefined && (
